@@ -1,52 +1,121 @@
-﻿# 三国谋定天下 — SQLite-first battle report analysis
+﻿# 三国谋定天下 — SQLite-first 战报分析与伤害公式反推
 
-一个 **SQLite-first** 的《三国谋定天下》战报分析工具。从原始战斗流水抓取，到配置补全、结构化入库、伤害公式验证，全程以 SQLite 为准。
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-green.svg)](pyproject.toml)
+
+一个 **SQLite-first** 的《三国谋定天下》战报分析工具集。核心目标是从游戏战斗流水数据中**反推伤害公式**，而非依赖官方或不完整的社区信息。
+
+## 核心成果
+
+### 1. 普攻/武力型战法正向公式
+
+从 1700+ 条伤害记录中推导出的完整计算公式，预测与实际伤害的**中位误差仅 4.3%**，**95% 的预测落在 10% 误差内**：
+
+```
+pred = (300 + 0.5 · 首回合前武力) · 出手时武力 / (目标统率 + 160)
+     · 战法系数 · 兵力因子 · 兵种克制 · 攻方增伤桶 · 目标受伤桶
+     · 会心奇谋倍率 · 特殊乘区 · 品级项
+```
+
+![预测 vs 实际](docs/forward_formula_pred_vs_actual_20260623.png)
+
+### 2. 按技能误差分布
+
+各技能的观测/预测比值稳定在 **0.95-1.05** 之间，表明公式结构正确：
+
+![按技能 obs/pred](docs/forward_formula_obs_pred_ratio_by_skill_20260623.png)
+
+### 3. 关键子项独立验证
+
+| 子项 | 结论 | 文档 |
+|------|------|------|
+| **兵力因子** | `F(N)=1 (N≥9000), (N/9000)^0.38` | [troop_factor_analysis.md](docs/troop_factor_analysis.md) |
+| **普攻基础项** | ~287，线性对数关系而非二次 | [normal_attack_damage_formula.md](docs/normal_attack_damage_formula.md) |
+| **属性项结构** | 确认 `300 + 0.5·场外` 的攻防项形式 | [forward_force_damage_formula_20260623.md](docs/forward_force_damage_formula_20260623.md) |
+| **品级隐式项** | 每品 ~1% 造成伤害 + 1% 免伤 | [codex_lessons.jsonl](docs/codex_lessons.jsonl) |
+
+### 4. 普攻基础项与场外武力
+
+剥离所有乘区后，基础项与场外武力的关系清晰可拟合：
+
+![普攻基础 vs 场外武力](docs/physical_base_vs_off_force_20260623.png)
+
+---
 
 ## 安装
 
 ```bash
+# 基本安装
 pip install -e .
-```
 
-如需抓取功能（依赖 Frida）：
-
-```bash
+# 含抓取功能（需要 Frida）
 pip install -e ".[capture]"
-```
 
-开发依赖（测试等）：
-
-```bash
+# 含开发依赖
 pip install -e ".[dev]"
 ```
 
 ## 目录结构
 
 ```
-data/                   # 唯一事实源：SQL dump 和原始捕捉
-src/sanmou/             # Python 包
-  db.py                 # 数据库连接与基础查询
-  analysis/             # 分析逻辑
-scripts/                # 命令行脚本入口
-reports/                # 人工检查用 Markdown（不入库）
-docs/                   # 文档、公式推导、口径记录
+data/
+  sanmou_battles.sql          # SQL dump — 唯一事实源
+  raw_captures/               # 原始战报捕捉文本
+src/sanmou/
+  db.py                       # 数据库连接与查询
+  analysis/                   # 分析逻辑（属性、兵力因子等）
+  capture/                    # Frida 抓取模块
+scripts/                      # 命令行脚本入口
+  forward_force_damage_formula.py   # 正向公式拟合
+  analyze_troop_factor.py           # 兵力因子拟合
+  audit_off_battle_attributes.py    # 场外属性审计
+  inherit_report_config.py          # 配置继承
+  ...
+docs/                         # 公式推导、口径记录、图表
 ```
 
-## 核心约束
+## 核心方法论
 
-- 分析只从 SQLite 读取，不从战报 Markdown 反向解析
+### 数据流
+
+```
+原始战报捕捉 → Markdown（人工检查件）
+                  ↓
+          配置补全 & 导入 SQLite
+                  ↓
+          SQLite = 唯一事实源
+                  ↓
+        剥离乘区 → 拟合子项 → 组装正向公式
+```
+
+### 关键约束
+
+- **不从 Markdown 反向解析**战斗流水
+- NPC（兵力 16000 或 >11000）红度/品级/战法红度强制为 0，韬略为「无韬略」
 - `docs/codex_lessons.jsonl` 记录取数口径和踩坑修正
-- `docs/codex_milestones.jsonl` 记录阶段性结论和下一步
-- NPC 武将（初始兵力 = 16000 或任意时刻兵力 > 11000）红度/品级/金印/战法红度固定为 0，韬略固定为「无韬略」
+- `docs/codex_milestones.jsonl` 记录阶段性结论
 
-## 推荐工作流
+### Base 剥离体系
 
-1. 抓取战报流水 → `data/raw_captures/`
-2. 生成 Markdown 供人工检查 → `reports/`
-3. 交互补全配置并导入 SQLite
-4. 从 SQLite 运行分析脚本
-5. 文档和口径更新 → `docs/`
+要从观测伤害反推基础项，需逐层剥离以下乘区：
+
+```
+Base = D_obs / 技能倍率 / 兵力因子 / 兵种克制 / 增伤桶 / 受伤桶
+     / 品级隐式项 / 会心奇谋倍率 / 特殊乘区
+```
+
+详见 [base_damage_reconstruction.md](docs/base_damage_reconstruction.md)。
+
+---
+
+## 代表性准确度
+
+| 口径 | 样本数 | 精确命中 | ±1 | 5% 内 | 10% 内 | 中位误差 |
+|------|------:|------:|------:|------:|------:|------:|
+| 全部含斩杀 | 1769 | 3.2% | 5.4% | 55.1% | 92.2% | 4.45% |
+| 非斩杀-普攻 | 655 | 1.7% | 4.7% | 58.8% | 95.1% | 4.35% |
+| 非斩杀-兵刃战法 | 1077 | 0.8% | 2.6% | 51.3% | 90.2% | 4.80% |
 
 ## 许可证
 
-MIT
+MIT — 详见 [LICENSE](LICENSE)。
