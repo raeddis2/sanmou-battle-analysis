@@ -1,0 +1,25 @@
+[project]
+name = "sanmou"
+version = "0.1.0"
+description = "SQLite-first battle report analysis for 三国谋定天下"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+capture = [
+    "frida>=16",
+]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sanmou"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
